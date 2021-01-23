@@ -9,6 +9,8 @@
 
 // utility functions
 
+static int SAMPLE_RATE = 48000;
+
 // higher memory implementation via http://rosettacode.org/wiki/Fast_Fourier_transform#C.2B.2B
 typedef std::complex<double> Complex;
 typedef std::valarray<Complex> CArray;
@@ -45,6 +47,45 @@ std::vector<double> hann_window(int window_size) {
     return window;
 }
 
+// from stft-peaks.cpp
+// used in fft
+// adapted from: https://stackoverflow.com/questions/1577475/c-sorting-and-keeping-track-of-indexes
+
+struct FFT_Pair {
+  double frequency, amplitude;
+};
+
+bool FFT_Pair_comparator_amp ( const FFT_Pair& l, const FFT_Pair& r)
+   { return l.amplitude > r.amplitude; } // sort descending
+
+bool FFT_Pair_comparator_freq ( const FFT_Pair& l, const FFT_Pair& r)
+   { return l.frequency < r.frequency; } // sort ascending
+
+std::vector<FFT_Pair> stft_peaks(CArray& fft_buf, int nfft, int n_peaks) {
+    double bin_step = double(SAMPLE_RATE) / nfft;
+    std::vector<FFT_Pair> peaks;
+    // avoid giving peaks at DC or Nyquist
+    // don't bother with negative frequencies
+    for (int j = 1; j < nfft/2; j++) {
+        double amp = std::abs(fft_buf[j]);
+        // making one of these >= so that only one value in a plateau is captured
+        if (amp > std::abs(fft_buf[j-1]) && amp >= std::abs(fft_buf[j+1])) {
+            peaks.push_back({std::abs(fft_buf[j]), j * bin_step});
+        }   
+    }   
+    
+    // sort by amp
+    std::sort(peaks.begin(), peaks.end(), FFT_Pair_comparator_amp);
+
+    // only keep top n_Peaks
+    peaks.erase(peaks.begin() + n_peaks, peaks.end());   
+        
+    // re-sort so that entries are sorted low to high in frequency
+    // (we don't even really need to do this)
+    std::sort(peaks.begin(), peaks.end(), FFT_Pair_comparator_freq);
+    return peaks;
+}
+
 // data structure for features
 // not really necessary in this file, but useful to implement this now for part 2
 struct Grain {
@@ -74,7 +115,7 @@ int main(int argc, char *argv[]) {
     assert(N % 2 == 0 && N > 0);
     // print usages?
 
-    int SAMPLING_RATE = 48000; // import?
+    int SAMPLE_RATE = 48000; // import?
     int hop_size = N / 2;
     int nfft = N*4; // more frequency "precision"
     int window_size = N;
@@ -145,7 +186,7 @@ int main(int argc, char *argv[]) {
         fft(fft_buf);
 
         // PART 3: FFT analyses
-        double bin_step = double(SAMPLING_RATE) / nfft;
+        double bin_step = double(SAMPLE_RATE) / nfft;
         double frame_sc_num = 0.0;
         double frame_sc_dem = 0.0;
         // don't bother with negative freqs
