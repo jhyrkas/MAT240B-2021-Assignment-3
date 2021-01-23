@@ -52,14 +52,15 @@ std::vector<double> hann_window(int window_size) {
 // adapted from: https://stackoverflow.com/questions/1577475/c-sorting-and-keeping-track-of-indexes
 
 struct FFT_Pair {
-  double frequency, amplitude;
+  double amplitude;
+  int bin;
 };
 
 bool FFT_Pair_comparator_amp ( const FFT_Pair& l, const FFT_Pair& r)
    { return l.amplitude > r.amplitude; } // sort descending
 
 bool FFT_Pair_comparator_freq ( const FFT_Pair& l, const FFT_Pair& r)
-   { return l.frequency < r.frequency; } // sort ascending
+   { return l.bin < r.bin; } // sort ascending
 
 std::vector<FFT_Pair> stft_peaks(CArray& fft_buf, int nfft, int n_peaks) {
     double bin_step = double(SAMPLE_RATE) / nfft;
@@ -70,20 +71,50 @@ std::vector<FFT_Pair> stft_peaks(CArray& fft_buf, int nfft, int n_peaks) {
         double amp = std::abs(fft_buf[j]);
         // making one of these >= so that only one value in a plateau is captured
         if (amp > std::abs(fft_buf[j-1]) && amp >= std::abs(fft_buf[j+1])) {
-            peaks.push_back({std::abs(fft_buf[j]), j * bin_step});
+            peaks.push_back({std::abs(fft_buf[j]), j});
         }   
-    }   
-    
+    }
+
     // sort by amp
     std::sort(peaks.begin(), peaks.end(), FFT_Pair_comparator_amp);
 
     // only keep top n_Peaks
-    peaks.erase(peaks.begin() + n_peaks, peaks.end());   
+    if (peaks.size() > n_peaks) {
+        peaks.erase(peaks.begin() + n_peaks, peaks.end());
+    }
         
     // re-sort so that entries are sorted low to high in frequency
     // (we don't even really need to do this)
     std::sort(peaks.begin(), peaks.end(), FFT_Pair_comparator_freq);
     return peaks;
+}
+
+int get_mode(std::vector<int> arr) {
+    assert(arr.size() > 0);
+    std::sort(arr.begin(), arr.end());
+    int last_val = arr[0];
+    int mode = last_val;
+    int mode_count = 1;
+    int last_val_count = 1;
+    for (int i = 1; i < arr.size(); i++) {
+        // increment and keep going
+        if (arr[i] == last_val) {
+            last_val_count++;
+        }
+        // number changed
+        else {
+            // did we find a new mode?
+            if (last_val_count > mode_count) {
+                mode = last_val;
+                mode_count = last_val_count;
+            }
+
+            last_val = arr[i];
+            last_val_count = 1;
+        }
+    }
+
+    return mode;
 }
 
 // data structure for features
@@ -92,11 +123,11 @@ struct Grain {
     int begin; // index into the vector<float> of the sound file
     int end;   // index into the vector<float> of the sound file
 
-    float peakToPeak;
-    float rms;
-    float zcr;
-    float centroid;
-    float f0;
+    double peakToPeak;
+    double rms;
+    double zcr;
+    double centroid;
+    double f0;
 };
 
 int main(int argc, char *argv[]) {
@@ -126,6 +157,8 @@ int main(int argc, char *argv[]) {
     std::vector<double> window = hann_window(window_size);
     int start_index = 0;
 
+    std::vector<Grain> grains;
+
     // analysis loop
     for (int fr = 0; fr < nframes; fr++) {
         // should deal with size corner cases
@@ -152,10 +185,6 @@ int main(int argc, char *argv[]) {
         //frame_zcr /= (end_index - start_index - 1); // check for divide by zero?
         double frame_ptp = frame_max_amp - frame_min_amp;
         double frame_rms = sqrt(frame_sum / (end_index - start_index));
-
-        std::cout << "Peak-to-peak amplitude: " << frame_ptp << "\n";
-        std::cout << "RMS amplitude: " << frame_rms << "\n";
-        std::cout << "ZCR: " << frame_zcr << "\n";
 
         // PART 2: perform FFT
         int j = 0;
@@ -186,6 +215,8 @@ int main(int argc, char *argv[]) {
         fft(fft_buf);
 
         // PART 3: FFT analyses
+
+        // SC
         double bin_step = double(SAMPLE_RATE) / nfft;
         double frame_sc_num = 0.0;
         double frame_sc_dem = 0.0;
@@ -197,10 +228,37 @@ int main(int argc, char *argv[]) {
             frame_sc_dem += amp;
         }
         double frame_sc = frame_sc_num / frame_sc_dem;
-        std::cout << "SC: " << frame_sc << "\n";
+        // divide by 0
+        if (frame_sc_dem < 0.0001 && frame_sc_dem > -0.0001) {
+            frame_sc = 0.0;
+        }
 
+        // f0
+
+        // sorted ascending by freq
+        std::vector<FFT_Pair> peaks = stft_peaks(fft_buf, nfft, 10);
+        int frame_f0_hop = 0; // no peaks = silence
+        if (peaks.size() == 1) {
+            frame_f0_hop = peaks[0].bin;
+        } else if (peaks.size() > 1) {
+            std::vector<int> diffs;
+            // double for-loop, but this should be very small (max 50 iterations or so)
+            for (int i = 0; i < peaks.size() - 1; i++) {
+                for (int j = i + 1; j < peaks.size(); j++) {
+                    diffs.push_back(peaks[j].bin - peaks[i].bin);
+                }
+            }
+            frame_f0_hop = get_mode(diffs);    
+        }
+        
+        grains.push_back({start_index, end_index, frame_ptp , frame_rms, frame_zcr, frame_sc, frame_f0_hop * bin_step});
         // next frame
         start_index += hop_size;
+    }
+
+    for (int i = 0; i < grains.size(); i++) {
+        Grain g = grains[i];
+        printf("%f, %f, %f, %f, %f\n", g.peakToPeak, g.rms, g.zcr, g.centroid, g.f0);
     }
     return 0;
 }
