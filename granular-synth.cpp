@@ -60,22 +60,219 @@ void fft(CArray &x) {
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
-struct Peak {
-  double magnitude, frequency;
+// adapted from granular-analysis.cpp
+
+// fixed size for now
+std::vector<double> hann_window(int window_size) {
+    std::vector<double> window;
+
+    for (int i = 0; i < window_size; i++) {
+        window.push_back(0.5 * (1.0 - cos(2.0*M_PI*(i+1)/2049.0)));
+    }
+
+    return window;
+}
+
+// from stft-peaks.cpp
+// used in fft
+// adapted from: https://stackoverflow.com/questions/1577475/c-sorting-and-keeping-track-of-indexes
+
+struct FFT_Pair {
+  double amplitude;
+  int bin;
 };
+
+bool FFT_Pair_comparator_amp ( const FFT_Pair& l, const FFT_Pair& r)
+   { return l.amplitude > r.amplitude; } // sort descending
+
+bool FFT_Pair_comparator_freq ( const FFT_Pair& l, const FFT_Pair& r)
+   { return l.bin < r.bin; } // sort ascending
+
+std::vector<FFT_Pair> stft_peaks(CArray& fft_buf, int nfft, int n_peaks) {
+    std::vector<FFT_Pair> peaks;
+    // avoid giving peaks at DC or Nyquist
+    // don't bother with negative frequencies
+    for (int j = 1; j < nfft/2; j++) {
+        double amp = std::abs(fft_buf[j]);
+        // making one of these >= so that only one value in a plateau is captured
+        if (amp > std::abs(fft_buf[j-1]) && amp >= std::abs(fft_buf[j+1])) {
+            peaks.push_back({std::abs(fft_buf[j]), j});
+        }
+    }
+
+    // sort by amp
+    std::sort(peaks.begin(), peaks.end(), FFT_Pair_comparator_amp);
+
+    // only keep top n_Peaks
+    if (peaks.size() > n_peaks) {
+        peaks.erase(peaks.begin() + n_peaks, peaks.end());
+    }
+
+    // re-sort so that entries are sorted low to high in frequency
+    // (we don't even really need to do this)
+    std::sort(peaks.begin(), peaks.end(), FFT_Pair_comparator_freq);
+    return peaks;
+}
+
+int get_mode(std::vector<int> arr) {
+    assert(arr.size() > 0);
+    std::sort(arr.begin(), arr.end());
+    int last_val = arr[0];
+    int mode = last_val;
+    int mode_count = 1;
+    int last_val_count = 1;
+    for (int i = 1; i < arr.size(); i++) {
+        // increment and keep going
+        if (arr[i] == last_val) {
+            last_val_count++;
+        }
+        // number changed
+        else {
+            // did we find a new mode?
+            if (last_val_count > mode_count) {
+                mode = last_val;
+                mode_count = last_val_count;
+            }
+
+            last_val = arr[i];
+            last_val_count = 1;
+        }
+    }
+
+    return mode;
+}
 
 struct Grain {
-  int begin;  // index into the vector<float> of the sound file
-  int end;    // index into the vector<float> of the sound file
+    int begin; // index into the vector<float> of the sound file
+    int end;   // index into the vector<float> of the sound file
 
-  float peakToPeak;
-  float rms;
-  float zcr;
-  float centroid;
-  float f0;
+    double peakToPeak;
+    double rms;
+    double zcr;
+    double centroid;
+    double f0;
 
-  // add more features?
+    int size() {
+        return end - begin;
+    }
 };
+
+// pass in grains vector, we will just add them
+// N is the grain size
+// this is basically the main of granular-analysis.cpp
+void create_grains(std::vector<Grain>& grains, std::vector<double> audio_data, int N) {
+    assert(N % 2 == 0 && N > 0);
+    // print usages?
+
+    int hop_size = N / 2;
+    int nfft = N*4; // more frequency "precision"
+    int window_size = N;
+    int n = audio_data.size();
+
+    int nframes = ceil(n / float(hop_size));
+
+    CArray fft_buf(nfft);
+    std::vector<double> window = hann_window(window_size);
+    int start_index = 0;
+
+    // analysis loop
+    for (int fr = 0; fr < nframes; fr++) {
+        // should deal with size corner cases
+        int end_index = std::min(n, start_index+window_size);
+
+        // PART 1: easy sliding window calculations
+        // let's assume reasonable audio
+        double frame_max_amp = -1.1;
+        double frame_min_amp = 1.1;
+        double frame_sum = 0.0;
+        double frame_zcr = 0.0;
+        for (int i = start_index; i < end_index; i++) {
+            frame_max_amp = std::max(frame_max_amp, audio_data[i]);
+            frame_min_amp = std::min(frame_min_amp, audio_data[i]);
+            frame_sum += pow(audio_data[i], 2);
+            if (i > start_index) {
+                double val = audio_data[i] * audio_data[i-1];
+                // checking for cases of all zeros here, not sure it will be very effective given floating point math
+                frame_zcr = val <= 0.0 && (audio_data[i] != 0.0 && audio_data[i-1] != 0.0) ? frame_zcr + 1 : frame_zcr;
+                //frame_zcr = val < 0.0 ? frame_zcr + 1 : frame_zcr;
+            }
+        }
+
+        //frame_zcr /= (end_index - start_index - 1); // check for divide by zero?
+        double frame_ptp = frame_max_amp - frame_min_amp;
+        double frame_rms = sqrt(frame_sum / (end_index - start_index));
+
+        // PART 2: perform FFT
+        int j = 0;
+        for (int i = start_index; i < end_index; i++) {
+            fft_buf[j] = audio_data[i];
+            j++;
+        }
+
+        // zero-pad what's left
+        while (j < nfft) {
+            fft_buf[j] = 0.0;
+            j++;
+        }
+
+        // apply hann window
+        if (fr == nframes - 1) {
+            for (int i = 0; i < window_size; i++) {
+                fft_buf[i] *= window[i];
+            }
+        } else {
+            // last window can be shorter than window_size, we still don't want a pop
+            std::vector<double> last_window = hann_window(end_index - start_index);
+            for (int i = 0; i < end_index - start_index; i++) {
+                fft_buf[i] *= last_window[i];
+            }
+        }
+
+        fft(fft_buf);
+
+        // PART 3: FFT analyses
+
+        // SC
+        double bin_step = double(SAMPLE_RATE) / nfft;
+        double frame_sc_num = 0.0;
+        double frame_sc_dem = 0.0;
+        // don't bother with negative freqs
+        for (int j = 0; j < nfft/2+1; j++) {
+            double amp = std::abs(fft_buf[j]);
+            double freq = j * bin_step;
+            frame_sc_num += (amp * freq);
+            frame_sc_dem += amp;
+        }
+        double frame_sc = frame_sc_num / frame_sc_dem;
+        // divide by 0
+        if (frame_sc_dem < 0.0001 && frame_sc_dem > -0.0001) {
+            frame_sc = 0.0;
+        }
+
+        // f0
+
+        // sorted ascending by freq
+        std::vector<FFT_Pair> peaks = stft_peaks(fft_buf, nfft, 10);
+        int frame_f0_hop = 0; // no peaks = silence
+        if (peaks.size() == 1) {
+            frame_f0_hop = peaks[0].bin;
+        } else if (peaks.size() > 1) {
+            std::vector<int> diffs;
+            // double for-loop, but this should be very small (max 50 iterations or so)
+            for (int i = 0; i < peaks.size() - 1; i++) {
+                for (int j = i + 1; j < peaks.size(); j++) {
+                    diffs.push_back(peaks[j].bin - peaks[i].bin);
+                }
+            }
+            frame_f0_hop = get_mode(diffs);
+        }
+
+        grains.push_back({start_index, end_index, frame_ptp , frame_rms, frame_zcr, frame_sc, frame_f0_hop * bin_step});
+        // next frame
+        start_index += hop_size;
+    }
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
@@ -88,12 +285,13 @@ struct MyApp : App {
   Parameter db{"db", "", -60.0, "", -60.0f, 0.0f};
   ControlGUI gui;
 
-  std::vector<float> input;
-  std::vector<Grain> grain;
+  // converting float to double...probably fine for this application
+  std::vector<double> input;
+  std::vector<Grain> grains;
 
   MyApp(int argc, char *argv[]) {
     if (argc < 2) {
-      printf("granular-synth <.wav>");
+      printf("granular-synth <.wav>\n");
       exit(1);
     }
 
@@ -107,82 +305,45 @@ struct MyApp : App {
     drwav_read_f32(pWav, pWav->totalPCMFrameCount, pSampleData);
 
     drwav_close(pWav);
-
+    int numFrames = pWav->totalPCMFrameCount;
+    if (numFrames < 0) {
+        printf("cast error: more frames than int can hold\n");
+        exit(-1);
+    }
+    printf("before read data\n");
     if (pWav->channels == 1)
-      for (int i = 0; i < pWav->totalPCMFrameCount; i++) {
+      for (int i = 0; i < numFrames; i++) {
         // XXX intermittent crash here !??
         input.push_back(pSampleData[i]);
 
         // debugger says that input gets very, very large
       }
     else if (pWav->channels == 2) {
-      for (int i = 0; i < pWav->totalPCMFrameCount; i++) {
+      for (int i = 0; i < numFrames; i++) {
         input.push_back((pSampleData[2 * i] + pSampleData[2 * i + 1]) / 2);
       }
     } else {
       printf("can't handle %d channels\n", pWav->channels);
       exit(1);
     }
+    printf("after read data\n");
 
     // this is how to get a command line argument
+    int N = 2048;
     if (argc > 2) {
-      int N = std::stoi(argv[2]);
+        N = std::stoi(argv[2]);
     }
 
-    int clipSize = 2048;
-    int hopSize = 1024;
-    int fftSize = 8192;
+    printf("before create_grains\n");
+    create_grains(grains, input, N);
+    printf("after create_grains\n");
+    printf("%lu\n", grains.size());
 
-    for (int n = 0; n < input.size() - clipSize; n += hopSize) {
-      // XXX build a grain; add it to the vector of grains
-      // - peak-to-peak amplitude
-      // - root-mean-squared
-      // - zero-crossing rate
-
-      Grain grain;
-
-      std::vector<double> clip(clipSize, 0.0);
-      for (int i = 0; i < clip.size(); i++) {
-        //          input      *       Hann window
-        clip[i] = input[n + i] * (1 - cos(2 * M_PI * i / clip.size())) / 2;
-      }
-
-      CArray data;
-      data.resize(fftSize);
-      for (int i = 0; i < clip.size(); i++) {
-        data[i] = clip[i];
-      }
-      for (int i = clip.size(); i < fftSize; i++) {
-        data[i] = 0.0;
-      }
-
-      // XXX the size of data really must be a power of two!
-      //
-      fft(data);
-
-      // XXX here is where you might compute the spectral centroid
-      //
-
-      std::vector<Peak> peak;
-      for (int i = 1; i < data.size() / 2; i++) {
-        // only accept maxima
-        //
-        if (abs(data[i - 1]) < abs(data[i]))
-          if (abs(data[i + 1]) < abs(data[i]))
-            peak.push_back({abs(data[i]) / (clip.size() / 2),
-                            1.0 * SAMPLE_RATE * i / data.size()});
-      }
-
-      std::sort(peak.begin(), peak.end(), [](Peak const &a, Peak const &b) {
-        return a.magnitude > b.magnitude;
-      });
-
-      peak.resize(10);  // throw away the extras
-
-      // XXX here's where you might estimate f0
-
-      this->grain.emplace_back(grain);
+    // making this easier for now when we have to do hann windows, etc
+    if (grains[grains.size() -1].size() < N) {
+        grains.erase(grains.end() - 1);
     }
+    printf("%lu\n", grains.size());
   }
 
   void onCreate() override {
@@ -216,10 +377,29 @@ struct MyApp : App {
   }
 
   bool onKeyDown(const Keyboard &k) override {
-    int midiNote = asciiToMIDI(k.key());
+    int ascii = k.key();
 
     // respond to user action to re-order the grains
     //
+    switch (ascii) {
+        case 49 :
+            printf("1\n");
+            break;
+        case 50 :
+            printf("2\n");
+            break;
+        case 51 :
+            printf("3\n");
+            break;
+        case 52 :
+            printf("4\n");
+            break;
+        case 53 :
+            printf("5\n");
+            break;
+        default :
+            printf("Please press a key 1-5\n");
+    }
     return true;
   }
 

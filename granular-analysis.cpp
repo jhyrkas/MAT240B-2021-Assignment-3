@@ -146,7 +146,6 @@ int main(int argc, char *argv[]) {
     assert(N % 2 == 0 && N > 0);
     // print usages?
 
-    int SAMPLE_RATE = 48000; // import?
     int hop_size = N / 2;
     int nfft = N*4; // more frequency "precision"
     int window_size = N;
