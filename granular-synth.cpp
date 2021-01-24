@@ -185,6 +185,17 @@ struct Grain {
     }
 };
 
+bool Grain_comparator_ptp ( const Grain& l, const Grain& r)
+   { return l.peakToPeak < r.peakToPeak; }
+bool Grain_comparator_rms ( const Grain& l, const Grain& r)
+   { return l.rms < r.rms; }
+bool Grain_comparator_zcr ( const Grain& l, const Grain& r)
+   { return l.zcr < r.zcr; }
+bool Grain_comparator_sc ( const Grain& l, const Grain& r)
+   { return l.centroid < r.centroid; }
+bool Grain_comparator_f0 ( const Grain& l, const Grain& r)
+   { return l.f0 < r.f0; }
+
 // pass in grains vector, we will just add them
 // N is the grain size
 // this is basically the main of granular-analysis.cpp
@@ -226,7 +237,7 @@ void create_grains(std::vector<Grain>& grains, std::vector<double> audio_data, i
             }
         }
 
-        //frame_zcr /= (end_index - start_index - 1); // check for divide by zero?
+        frame_zcr *= (double(SAMPLE_RATE) / window_size); // convert to Hz
         double frame_ptp = frame_max_amp - frame_min_amp;
         double frame_rms = sqrt(frame_sum / (end_index - start_index));
 
@@ -333,16 +344,12 @@ struct MyApp : App {
         N = std::stoi(argv[2]);
     }
 
-    printf("before create_grains\n");
     create_grains(grains, input, N);
-    printf("after create_grains\n");
-    printf("%lu\n", grains.size());
 
     // making this easier for now when we have to do hann windows, etc
     if (grains[grains.size() -1].size() < N) {
         grains.erase(grains.end() - 1);
     }
-    printf("%lu\n", grains.size());
   }
 
   void onCreate() override {
@@ -383,18 +390,23 @@ struct MyApp : App {
     switch (ascii) {
         case 49 :
             printf("1\n");
+            std::sort(this->grains.begin(), this->grains.end(), Grain_comparator_ptp);
             break;
         case 50 :
             printf("2\n");
+            std::sort(this->grains.begin(), this->grains.end(), Grain_comparator_rms);
             break;
         case 51 :
             printf("3\n");
+            std::sort(this->grains.begin(), this->grains.end(), Grain_comparator_zcr);
             break;
         case 52 :
             printf("4\n");
+            std::sort(this->grains.begin(), this->grains.end(), Grain_comparator_sc);
             break;
         case 53 :
             printf("5\n");
+            std::sort(this->grains.begin(), this->grains.end(), Grain_comparator_f0);
             break;
         default :
             printf("Please press a key 1-5\n");

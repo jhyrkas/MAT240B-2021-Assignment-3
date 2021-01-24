@@ -181,7 +181,7 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        //frame_zcr /= (end_index - start_index - 1); // check for divide by zero?
+        frame_zcr *= (double(SAMPLE_RATE) / window_size); // convert to Hz
         double frame_ptp = frame_max_amp - frame_min_amp;
         double frame_rms = sqrt(frame_sum / (end_index - start_index));
 
