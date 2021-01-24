@@ -327,6 +327,7 @@ struct MyApp : App {
   // converting float to double...probably fine for this application
   std::vector<double> input;
   std::vector<Grain> grains;
+  int N;
 
   MyApp(int argc, char *argv[]) {
     if (argc < 2) {
@@ -339,7 +340,7 @@ struct MyApp : App {
     fflush(stdout);
 
     // this is how to get a command line argument
-    int N = 2048;
+    N = 2048;
     if (argc > 2) {
         N = std::stoi(argv[2]);
     }
@@ -369,16 +370,58 @@ struct MyApp : App {
   }
 
   void onSound(AudioIOData &io) override {
+    std::vector<double> window = hann_window(this->N);
+    // two special cases
+    if (this->grains.size() == 0) {
+        printf("no audio\n");
+        return;
+    } else if (this->grains.size() == 1) {
+        int start = this->grains[0].begin;
+        int end = this->grains[0].end;
+        while(io()) {
+            // grains are guananteed to be N samples long, so this is a little overkill
+            for (int i = 0; start + i < end; i++) {
+                float sample = dbtoa(db.get()) * this->input[start+i] * window[i];
+                io.out(0) = sample;
+                io.out(1) = sample;
+            }
+        }
+        return;
+    }
+
+    // general case
     while (io()) {
-      float f = 0;
+        // start the first grain
+        int start = this->grains[0].begin;
+        int end = this->grains[0].end;
+        for (int i = 0; i < N / 2; i++) {
+            float sample = dbtoa(db.get()) * this->input[start+i] * window[i];
+            io.out(0) = sample;
+            io.out(1) = sample;   
+        }
+        // now for all other grains
+        for (int fr = 0; fr < this->grains.size(); fr++) {
+            int frame_start = this->grains[fr].begin;
+            int last_frame_start = this->grains[fr-1].begin;
+            for (int i = 0; i < N / 2; i++) {
+                // first half of this frame
+                float sample = this->input[frame_start+i] * window[i];
+                // last half of last frame
+                sample += this->input[last_frame_start+(N/2)+i] * window[(N/2)+i];
+                sample *= dbtoa(db.get());
+                io.out(0) = sample;
+                io.out(1) = sample;
+            }
+        }
 
-      // XXX
-      // f += ?
-      //
-
-      f *= dbtoa(db.get());
-      io.out(0) = f;
-      io.out(1) = f;
+        // finish the last grain
+        start = this->grains[this->grains.size()-1].begin;
+        end = this->grains[this->grains.size()-1].end;
+        for (int i = N/2; i < N; i++) {
+            float sample = dbtoa(db.get()) * this->input[start+i] * window[i];
+            io.out(0) = sample;
+            io.out(1) = sample;
+        }
     }
   }
 
@@ -389,23 +432,23 @@ struct MyApp : App {
     //
     switch (ascii) {
         case 49 :
-            printf("1\n");
+            printf("Sorted by Peak-to-peak Amp\n");
             std::sort(this->grains.begin(), this->grains.end(), Grain_comparator_ptp);
             break;
         case 50 :
-            printf("2\n");
+            printf("Sorted by RMS\n");
             std::sort(this->grains.begin(), this->grains.end(), Grain_comparator_rms);
             break;
         case 51 :
-            printf("3\n");
+            printf("Sorted by ZCR\n");
             std::sort(this->grains.begin(), this->grains.end(), Grain_comparator_zcr);
             break;
         case 52 :
-            printf("4\n");
+            printf("Sorted by Spectral Centroid\n");
             std::sort(this->grains.begin(), this->grains.end(), Grain_comparator_sc);
             break;
         case 53 :
-            printf("5\n");
+            printf("Sorted by F0\n");
             std::sort(this->grains.begin(), this->grains.end(), Grain_comparator_f0);
             break;
         default :
