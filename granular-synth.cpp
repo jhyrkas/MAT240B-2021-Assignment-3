@@ -56,6 +56,34 @@ void fft(CArray &x) {
   }
 }
 
+void load(std::vector<double> &input, const char *filePath) {
+  unsigned int channels;
+  unsigned int sampleRate;
+  drwav_uint64 totalPCMFrameCount;
+  float *pSampleData = drwav_open_file_and_read_pcm_frames_f32(
+      filePath, &channels, &sampleRate, &totalPCMFrameCount, NULL);
+  if (pSampleData == NULL) {
+    printf("failed to load %s\n", filePath);
+    exit(1);
+  }
+
+  //
+  if (channels == 1)
+    for (int i = 0; i < totalPCMFrameCount; i++) {
+      input.push_back(pSampleData[i]);
+    }
+  else if (channels == 2) {
+    for (int i = 0; i < totalPCMFrameCount; i++) {
+      input.push_back((pSampleData[2 * i] + pSampleData[2 * i + 1]) / 2);
+    }
+  } else {
+    printf("can't handle %d channels\n", channels);
+    exit(1);
+  }
+
+  drwav_free(pSampleData, NULL);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
@@ -295,38 +323,9 @@ struct MyApp : App {
       exit(1);
     }
 
-    drwav *pWav = drwav_open_file(argv[1]);
-    if (pWav == nullptr) {
-      exit(-1);
-    }
-
-    float *pSampleData = (float *)malloc((size_t)pWav->totalPCMFrameCount *
-                                         pWav->channels * sizeof(float));
-    drwav_read_f32(pWav, pWav->totalPCMFrameCount, pSampleData);
-
-    drwav_close(pWav);
-    int numFrames = pWav->totalPCMFrameCount;
-    if (numFrames < 0) {
-        printf("cast error: more frames than int can hold\n");
-        exit(-1);
-    }
-    printf("before read data\n");
-    if (pWav->channels == 1)
-      for (int i = 0; i < numFrames; i++) {
-        // XXX intermittent crash here !??
-        input.push_back(pSampleData[i]);
-
-        // debugger says that input gets very, very large
-      }
-    else if (pWav->channels == 2) {
-      for (int i = 0; i < numFrames; i++) {
-        input.push_back((pSampleData[2 * i] + pSampleData[2 * i + 1]) / 2);
-      }
-    } else {
-      printf("can't handle %d channels\n", pWav->channels);
-      exit(1);
-    }
-    printf("after read data\n");
+    load(input, argv[1]);
+    printf("input size is %ld\n", input.size());
+    fflush(stdout);
 
     // this is how to get a command line argument
     int N = 2048;
