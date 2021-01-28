@@ -327,7 +327,9 @@ struct MyApp : App {
   // converting float to double...probably fine for this application
   std::vector<double> input;
   std::vector<Grain> grains;
+  std::vector<double> window;
   int N;
+  int t; // time pointer
 
   MyApp(int argc, char *argv[]) {
     if (argc < 2) {
@@ -346,11 +348,16 @@ struct MyApp : App {
     }
 
     create_grains(grains, input, N);
+    printf("num grains is %lu\n", grains.size());
+    printf("grain 0 length is %i\n", grains[0].end - grains[0].begin);
 
     // making this easier for now when we have to do hann windows, etc
     if (grains[grains.size() -1].size() < N) {
         grains.erase(grains.end() - 1);
     }
+
+    t = 0;
+    window = hann_window(N);
   }
 
   void onCreate() override {
@@ -370,58 +377,39 @@ struct MyApp : App {
   }
 
   void onSound(AudioIOData &io) override {
-    std::vector<double> window = hann_window(this->N);
-    // two special cases
-    if (this->grains.size() == 0) {
-        printf("no audio\n");
-        return;
-    } else if (this->grains.size() == 1) {
-        int start = this->grains[0].begin;
-        int end = this->grains[0].end;
-        while(io()) {
-            // grains are guananteed to be N samples long, so this is a little overkill
-            for (int i = 0; start + i < end; i++) {
-                float sample = dbtoa(db.get()) * this->input[start+i] * window[i];
-                io.out(0) = sample;
-                io.out(1) = sample;
-            }
-        }
-        return;
-    }
+    // CHECK
+    int t_limit = (grains.size() + 1) * (N/2);
 
     // general case
     while (io()) {
-        // start the first grain
-        int start = this->grains[0].begin;
-        int end = this->grains[0].end;
-        for (int i = 0; i < N / 2; i++) {
-            float sample = dbtoa(db.get()) * this->input[start+i] * window[i];
-            io.out(0) = sample;
-            io.out(1) = sample;   
-        }
-        // now for all other grains
-        for (int fr = 0; fr < this->grains.size(); fr++) {
-            int frame_start = this->grains[fr].begin;
-            int last_frame_start = this->grains[fr-1].begin;
-            for (int i = 0; i < N / 2; i++) {
-                // first half of this frame
-                float sample = this->input[frame_start+i] * window[i];
-                // last half of last frame
-                sample += this->input[last_frame_start+(N/2)+i] * window[(N/2)+i];
-                sample *= dbtoa(db.get());
-                io.out(0) = sample;
-                io.out(1) = sample;
-            }
+        // reset
+        if (this->t >= t_limit) {
+            printf("resetting %i\n", t / (N / 2));
+            t = 0;
         }
 
-        // finish the last grain
-        start = this->grains[this->grains.size()-1].begin;
-        end = this->grains[this->grains.size()-1].end;
-        for (int i = N/2; i < N; i++) {
-            float sample = dbtoa(db.get()) * this->input[start+i] * window[i];
-            io.out(0) = sample;
-            io.out(1) = sample;
+        // the logic here is that we will always play a sample from
+        // the first half of grain_num and the last half of grain_num - 1
+        // the trick is to make the logic work when we are in the
+        // first or last grain as well
+
+        int grain_num = t / (N / 2);
+        int time_index = t % (N / 2);
+        int prev_grain = grain_num - 1;
+        int prev_time = (N/2) + time_index;
+        int frame_start = grain_num < grains.size() ? grains[grain_num].begin : -1;
+        int prev_frame_start = prev_grain > -1 ? grains[prev_grain].begin : -1;
+        float sample = 0;
+        if (frame_start > -1) {
+            sample = this->input[frame_start+time_index] * window[time_index];
         }
+        if (prev_frame_start > -1) {
+            sample += this->input[prev_frame_start+prev_time] * window[prev_time];
+        }
+        sample *= dbtoa(db.get());
+        io.out(0) = sample;
+        io.out(1) = sample;
+        this->t += 1;
     }
   }
 
@@ -454,6 +442,7 @@ struct MyApp : App {
         default :
             printf("Please press a key 1-5\n");
     }
+    this->t = 0; // wonder about thread safe-ness of this
     return true;
   }
 
