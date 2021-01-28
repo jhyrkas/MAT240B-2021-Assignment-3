@@ -349,7 +349,6 @@ struct MyApp : App {
 
     create_grains(grains, input, N);
     printf("num grains is %lu\n", grains.size());
-    printf("grain 0 length is %i\n", grains[0].end - grains[0].begin);
 
     // making this easier for now when we have to do hann windows, etc
     if (grains[grains.size() -1].size() < N) {
@@ -384,7 +383,6 @@ struct MyApp : App {
     while (io()) {
         // reset
         if (this->t >= t_limit) {
-            printf("resetting %i\n", t / (N / 2));
             t = 0;
         }
 
