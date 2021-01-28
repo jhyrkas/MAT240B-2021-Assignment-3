@@ -232,12 +232,11 @@ void create_grains(std::vector<Grain>& grains, std::vector<double> audio_data, i
             if (i > start_index) {
                 double val = audio_data[i] * audio_data[i-1];
                 // checking for cases of all zeros here, not sure it will be very effective given floating point math
-                frame_zcr = val <= 0.0 && (audio_data[i] != 0.0 && audio_data[i-1] != 0.0) ? frame_zcr + 1 : frame_zcr;
-                //frame_zcr = val < 0.0 ? frame_zcr + 1 : frame_zcr;
+                frame_zcr = val < 0.0 ? frame_zcr + 1 : frame_zcr;
             }
         }
 
-        frame_zcr *= (double(SAMPLE_RATE) / window_size); // convert to Hz
+        frame_zcr = (frame_zcr / (window_size-1)) * SAMPLE_RATE; // convert to Hz
         double frame_ptp = frame_max_amp - frame_min_amp;
         double frame_rms = sqrt(frame_sum / (end_index - start_index));
 
